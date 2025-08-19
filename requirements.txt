@@ -1,1 +1,2 @@
-PyGObject>=3.42.0
+PyQt6>=6.5.0
+Pillow>=10.0.0

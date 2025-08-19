@@ -1,110 +1,159 @@
 # Quickshell Wallpaper Changer
 
-A GTK4 wallpaper changer application for Quickshell/illogical-impulse setup on Arch Linux.
+A modern wallpaper manager with system tray integration and visual gallery for Quickshell/illogical-impulse setup on Arch Linux.
 
 ## Features
 
-- 🎨 Modern GTK4/Adwaita interface
-- ⏱️ Configurable intervals (1, 5, 10, 15, 30 minutes)
-- 📁 Custom wallpaper directory selection
-- 🔄 Random wallpaper selection
+### System Tray Integration
+- 🔄 Quick wallpaper changes from tray menu
+- ⏭️ Next/Previous wallpaper navigation
+- ⏱️ Real-time countdown to next auto-change
+- 📜 Recent wallpapers history
+- 🔔 Desktop notifications
+
+### Visual Gallery
+- 🖼️ Grid view with thumbnails
+- 🔍 Live preview of selected wallpapers
+- 🔎 Search and filter wallpapers by name
+- 📊 Sort by name, date, or random
+- 💾 Cached thumbnails for fast loading
+- 📏 Adjustable thumbnail sizes
+
+### Advanced Features
+- ⚡ Application runs in background (doesn't close with window)
+- ⚙️ Quick settings dialog
 - 🎯 Direct integration with Quickshell config
-- 🚀 Systemd service for background operation
 - 📸 Supports multiple image formats (jpg, jpeg, png, gif, bmp, webp)
+- 🔀 Shuffle mode for random wallpapers
+- 🚫 Exclude specific wallpapers
 
 ## Requirements
 
 - Arch Linux
 - Python 3.8+
-- GTK4 and libadwaita
+- PyQt6
+- Pillow (for image processing)
 - jq (for JSON manipulation)
 - Quickshell/illogical-impulse setup
 
 ## Installation
 
-### Quick Install
-
-```bash
-./install.sh
-```
-
-### Manual Installation
+### Install Dependencies
 
 1. Install system dependencies:
 ```bash
-sudo pacman -S python python-gobject gtk4 libadwaita jq
+sudo pacman -S python python-pyqt6 python-pillow jq
 ```
 
-2. Install Python dependencies:
+2. Or install via pip:
 ```bash
 pip install --user -r requirements.txt
 ```
 
-3. Copy files to appropriate locations:
-```bash
-# Main application
-cp wallpaper_changer.py ~/.local/bin/
-chmod +x ~/.local/bin/wallpaper_changer.py
-
-# Daemon
-cp wallpaper_changer_daemon.py ~/.local/bin/wallpaper-changer-daemon
-chmod +x ~/.local/bin/wallpaper-changer-daemon
-
-# Desktop entry
-cp wallpaper-changer.desktop ~/.local/share/applications/
-
-# Systemd service
-cp wallpaper-changer.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-```
-
 ## Usage
 
-### GUI Application
+### Running the Application
 
-Run the application:
+Start the wallpaper changer:
 ```bash
-python3 ~/.local/bin/wallpaper_changer.py
+python3 main.py
 ```
 
-Or find "Wallpaper Changer" in your application menu.
+The application will:
+- Start minimized to system tray
+- Show an icon in your system tray area
+- Continue running even when windows are closed
 
-### Background Service (Optional)
+### System Tray Controls
 
-Enable the systemd service for automatic wallpaper changes:
-```bash
-systemctl --user enable --now wallpaper-changer.service
-```
+**Right-click** the tray icon for quick actions:
+- Change wallpaper immediately
+- Navigate to next/previous wallpaper
+- Open the visual gallery
+- Access settings
+- View recent wallpapers
 
-Check service status:
-```bash
-systemctl --user status wallpaper-changer.service
-```
+**Double-click** the tray icon to open the gallery window.
 
-Stop the service:
-```bash
-systemctl --user stop wallpaper-changer.service
-```
+### Gallery Window
+
+The gallery provides:
+- Visual grid of all wallpapers
+- Click to preview in large format
+- Double-click to apply wallpaper
+- Search bar for filtering by name
+- Sort options (name, date, random)
+- Thumbnail size adjustment
+
+### Keyboard Shortcuts
+
+- `Ctrl+G` - Open gallery window
+- `Ctrl+R` - Random wallpaper
+- `Ctrl+Right` - Next wallpaper
+- `Ctrl+Left` - Previous wallpaper
+- `Ctrl+Space` - Toggle auto-change
+- `Escape` - Close gallery window
+- `Enter` - Apply selected wallpaper (in gallery)
 
 ## Configuration
 
 The application stores its configuration in:
 ```
 ~/.config/wallpaper-changer/config.json
+~/.config/wallpaper-changer/history.json
+~/.config/wallpaper-changer/cache/
 ```
 
-Example configuration:
+### Configuration Options
+
 ```json
 {
-  "directory": "/home/username/Pictures/wallpapers",
-  "interval": 5,
-  "enabled": true
+  "wallpaper_directory": "/home/username/Pictures/wallpapers",
+  "change_interval": 30,
+  "auto_change_enabled": false,
+  "shuffle": true,
+  "show_notifications": true,
+  "thumbnail_size": 150,
+  "gallery_columns": 4,
+  "cache_thumbnails": true,
+  "recent_wallpapers_limit": 20,
+  "excluded_files": []
 }
+```
+
+## File Structure
+
+```
+slideshow-qs/
+├── main.py                 # Main application with system tray
+├── gallery_window.py       # Visual gallery window
+├── wallpaper_manager.py    # Wallpaper management logic
+├── config_manager.py       # Configuration handling
+├── requirements.txt        # Python dependencies
+├── assets/
+│   └── icon.png           # Tray icon (optional)
+└── README.md
 ```
 
 ## How It Works
 
 The application modifies the Quickshell configuration file at `~/.config/illogical-impulse/config.json` using the `jq` command to update the `background.wallpaperPath` property.
+
+## Troubleshooting
+
+### System tray icon not appearing
+- Ensure your desktop environment supports system tray icons
+- Check if you have a system tray/notification area enabled
+
+### Wallpapers not changing
+- Verify the Quickshell config file exists at `~/.config/illogical-impulse/config.json`
+- Check that `jq` is installed: `which jq`
+- Ensure wallpaper directory contains valid image files
+
+### Gallery not loading thumbnails
+- Check if Pillow is properly installed
+- Clear cache from the toolbar menu
+- Verify image files are readable
 
 ## License
 

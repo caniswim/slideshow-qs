@@ -1,0 +1,453 @@
+#!/usr/bin/env python3
+"""
+Main application with system tray for wallpaper changer
+"""
+import sys
+import os
+from pathlib import Path
+
+# Set environment variable to avoid conflicts
+os.environ['QT_QPA_PLATFORM'] = 'xcb'
+from PyQt6.QtWidgets import (
+    QApplication, QSystemTrayIcon, QMenu, QDialog,
+    QVBoxLayout, QHBoxLayout, QLabel, QSpinBox,
+    QPushButton, QFileDialog, QCheckBox, QDialogButtonBox,
+    QMessageBox
+)
+from PyQt6.QtCore import QTimer, Qt, pyqtSignal
+from PyQt6.QtGui import QIcon, QAction, QPixmap
+
+from config_manager import ConfigManager
+from wallpaper_manager import WallpaperManager
+from gallery_window import GalleryWindow
+
+
+class SettingsDialog(QDialog):
+    """Settings dialog for quick configuration"""
+    
+    def __init__(self, config_manager, parent=None):
+        super().__init__(parent)
+        self.config = config_manager
+        self.setup_ui()
+        self.load_settings()
+    
+    def setup_ui(self):
+        """Setup the settings dialog UI"""
+        self.setWindowTitle("Wallpaper Changer Settings")
+        self.setModal(True)
+        self.setFixedSize(400, 300)
+        
+        layout = QVBoxLayout()
+        
+        # Wallpaper directory
+        dir_layout = QHBoxLayout()
+        dir_layout.addWidget(QLabel("Wallpaper Directory:"))
+        self.dir_label = QLabel()
+        dir_layout.addWidget(self.dir_label)
+        self.browse_button = QPushButton("Browse...")
+        self.browse_button.clicked.connect(self.browse_directory)
+        dir_layout.addWidget(self.browse_button)
+        layout.addLayout(dir_layout)
+        
+        # Change interval
+        interval_layout = QHBoxLayout()
+        interval_layout.addWidget(QLabel("Change Interval (minutes):"))
+        self.interval_spin = QSpinBox()
+        self.interval_spin.setMinimum(1)
+        self.interval_spin.setMaximum(1440)  # Max 24 hours
+        interval_layout.addWidget(self.interval_spin)
+        layout.addLayout(interval_layout)
+        
+        # Auto change checkbox
+        self.auto_change_check = QCheckBox("Enable automatic wallpaper change")
+        layout.addWidget(self.auto_change_check)
+        
+        # Shuffle checkbox
+        self.shuffle_check = QCheckBox("Shuffle wallpapers")
+        layout.addWidget(self.shuffle_check)
+        
+        # Notifications checkbox
+        self.notifications_check = QCheckBox("Show notifications")
+        layout.addWidget(self.notifications_check)
+        
+        layout.addStretch()
+        
+        # Buttons
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | 
+            QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.save_settings)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        
+        self.setLayout(layout)
+    
+    def load_settings(self):
+        """Load current settings"""
+        self.dir_label.setText(self.config.get('wallpaper_directory', ''))
+        self.interval_spin.setValue(self.config.get('change_interval', 30))
+        self.auto_change_check.setChecked(self.config.get('auto_change_enabled', False))
+        self.shuffle_check.setChecked(self.config.get('shuffle', True))
+        self.notifications_check.setChecked(self.config.get('show_notifications', True))
+    
+    def browse_directory(self):
+        """Browse for wallpaper directory"""
+        current_dir = self.config.get('wallpaper_directory', str(Path.home()))
+        directory = QFileDialog.getExistingDirectory(
+            self, "Select Wallpaper Directory", current_dir
+        )
+        if directory:
+            self.dir_label.setText(directory)
+    
+    def save_settings(self):
+        """Save settings and close"""
+        self.config.update({
+            'wallpaper_directory': self.dir_label.text(),
+            'change_interval': self.interval_spin.value(),
+            'auto_change_enabled': self.auto_change_check.isChecked(),
+            'shuffle': self.shuffle_check.isChecked(),
+            'show_notifications': self.notifications_check.isChecked()
+        })
+        self.accept()
+
+
+class WallpaperChangerApp(QApplication):
+    """Main application class"""
+    
+    def __init__(self, argv):
+        super().__init__(argv)
+        
+        # Don't quit when last window closes
+        self.setQuitOnLastWindowClosed(False)
+        
+        # Initialize managers
+        self.config_manager = ConfigManager()
+        self.wallpaper_manager = WallpaperManager(self.config_manager)
+        
+        # Initialize UI components
+        self.gallery_window = None
+        self.settings_dialog = None
+        
+        # Create system tray
+        self.create_tray_icon()
+        
+        # Setup auto-change timer
+        self.auto_change_timer = QTimer()
+        self.auto_change_timer.timeout.connect(self.auto_change_wallpaper)
+        self.update_auto_change_timer()
+        
+        # Setup time display timer
+        self.time_display_timer = QTimer()
+        self.time_display_timer.timeout.connect(self.update_time_display)
+        self.time_display_timer.start(1000)  # Update every second
+        
+        self.last_change_time = 0
+        self.time_until_next = 0
+    
+    def create_tray_icon(self):
+        """Create system tray icon and menu"""
+        # Create tray icon
+        self.tray_icon = QSystemTrayIcon(self)
+        
+        # Try to load custom icon, fallback to theme icon
+        icon_path = Path(__file__).parent / 'assets' / 'icon.png'
+        if icon_path.exists():
+            self.tray_icon.setIcon(QIcon(str(icon_path)))
+        else:
+            # Fallback to theme icon
+            icon = QIcon.fromTheme('preferences-desktop-wallpaper')
+            if icon.isNull():
+                # Create a simple colored icon as last resort
+                pixmap = QPixmap(64, 64)
+                pixmap.fill(Qt.GlobalColor.darkBlue)
+                icon = QIcon(pixmap)
+            self.tray_icon.setIcon(icon)
+        
+        # Create context menu
+        self.create_tray_menu()
+        
+        # Connect double-click
+        self.tray_icon.activated.connect(self.on_tray_activated)
+        
+        # Show tray icon
+        self.tray_icon.show()
+    
+    def create_tray_menu(self):
+        """Create tray icon context menu"""
+        menu = QMenu()
+        
+        # Time until next change
+        self.time_action = QAction("Next change: Disabled", menu)
+        self.time_action.setEnabled(False)
+        menu.addAction(self.time_action)
+        
+        menu.addSeparator()
+        
+        # Change wallpaper now
+        change_now_action = QAction("🔄 Change Wallpaper Now", menu)
+        change_now_action.triggered.connect(self.change_wallpaper_now)
+        menu.addAction(change_now_action)
+        
+        # Next wallpaper
+        next_action = QAction("⏭️ Next Wallpaper", menu)
+        next_action.triggered.connect(self.next_wallpaper)
+        menu.addAction(next_action)
+        
+        # Previous wallpaper
+        prev_action = QAction("⏮️ Previous Wallpaper", menu)
+        prev_action.triggered.connect(self.previous_wallpaper)
+        menu.addAction(prev_action)
+        
+        menu.addSeparator()
+        
+        # Open gallery
+        gallery_action = QAction("🖼️ Open Gallery", menu)
+        gallery_action.triggered.connect(self.show_gallery)
+        menu.addAction(gallery_action)
+        
+        menu.addSeparator()
+        
+        # Auto-change toggle
+        self.auto_change_action = QAction("▶️ Enable Auto-Change", menu)
+        self.auto_change_action.setCheckable(True)
+        self.auto_change_action.setChecked(self.config_manager.get('auto_change_enabled', False))
+        self.auto_change_action.triggered.connect(self.toggle_auto_change)
+        self.update_auto_change_action()
+        menu.addAction(self.auto_change_action)
+        
+        # Settings
+        settings_action = QAction("⚙️ Settings", menu)
+        settings_action.triggered.connect(self.show_settings)
+        menu.addAction(settings_action)
+        
+        menu.addSeparator()
+        
+        # Recent wallpapers submenu
+        recent_menu = menu.addMenu("📜 Recent Wallpapers")
+        self.update_recent_menu(recent_menu)
+        
+        menu.addSeparator()
+        
+        # About
+        about_action = QAction("ℹ️ About", menu)
+        about_action.triggered.connect(self.show_about)
+        menu.addAction(about_action)
+        
+        # Quit
+        quit_action = QAction("❌ Quit", menu)
+        quit_action.triggered.connect(self.quit_app)
+        menu.addAction(quit_action)
+        
+        self.tray_icon.setContextMenu(menu)
+        self.tray_menu = menu
+    
+    def update_recent_menu(self, recent_menu):
+        """Update recent wallpapers menu"""
+        recent_menu.clear()
+        
+        recent = self.wallpaper_manager.get_recent_wallpapers()
+        if not recent:
+            action = QAction("No recent wallpapers", recent_menu)
+            action.setEnabled(False)
+            recent_menu.addAction(action)
+        else:
+            for wallpaper in recent[:10]:  # Show last 10
+                action = QAction(wallpaper.name, recent_menu)
+                action.triggered.connect(lambda checked, p=wallpaper: self.set_wallpaper(p))
+                recent_menu.addAction(action)
+            
+            if recent:
+                recent_menu.addSeparator()
+                clear_action = QAction("Clear History", recent_menu)
+                clear_action.triggered.connect(self.clear_history)
+                recent_menu.addAction(clear_action)
+    
+    def on_tray_activated(self, reason):
+        """Handle tray icon activation"""
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self.show_gallery()
+    
+    def show_gallery(self):
+        """Show gallery window"""
+        if not self.gallery_window:
+            self.gallery_window = GalleryWindow(self.config_manager, self.wallpaper_manager)
+            self.gallery_window.wallpaper_selected.connect(self.on_wallpaper_selected)
+        
+        self.gallery_window.show()
+        self.gallery_window.raise_()
+        self.gallery_window.activateWindow()
+    
+    def show_settings(self):
+        """Show settings dialog"""
+        dialog = SettingsDialog(self.config_manager)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            # Update wallpaper list if directory changed
+            self.wallpaper_manager.refresh_wallpaper_list()
+            # Update auto-change timer
+            self.update_auto_change_timer()
+            self.update_auto_change_action()
+    
+    def show_about(self):
+        """Show about dialog"""
+        QMessageBox.about(
+            None,
+            "About Wallpaper Changer",
+            "<h3>Wallpaper Changer</h3>"
+            "<p>A modern wallpaper manager for Quickshell/illogical-impulse.</p>"
+            "<p>Features:</p>"
+            "<ul>"
+            "<li>System tray integration</li>"
+            "<li>Visual gallery with preview</li>"
+            "<li>Automatic wallpaper changes</li>"
+            "<li>Thumbnail caching</li>"
+            "</ul>"
+            "<p>Version 2.0</p>"
+        )
+    
+    def change_wallpaper_now(self):
+        """Change to random wallpaper"""
+        wallpaper = self.wallpaper_manager.random_wallpaper()
+        if wallpaper:
+            self.show_notification(f"Wallpaper changed to: {wallpaper.name}")
+            self.last_change_time = QTimer().remainingTime()
+            self.update_recent_menu_in_tray()
+        else:
+            self.show_notification("No wallpapers found")
+    
+    def next_wallpaper(self):
+        """Change to next wallpaper"""
+        wallpaper = self.wallpaper_manager.next_wallpaper()
+        if wallpaper:
+            self.show_notification(f"Wallpaper changed to: {wallpaper.name}")
+            self.update_recent_menu_in_tray()
+    
+    def previous_wallpaper(self):
+        """Change to previous wallpaper"""
+        wallpaper = self.wallpaper_manager.previous_wallpaper()
+        if wallpaper:
+            self.show_notification(f"Wallpaper changed to: {wallpaper.name}")
+            self.update_recent_menu_in_tray()
+    
+    def set_wallpaper(self, wallpaper_path):
+        """Set specific wallpaper"""
+        if self.wallpaper_manager.set_wallpaper(wallpaper_path):
+            self.show_notification(f"Wallpaper changed to: {wallpaper_path.name}")
+            self.update_recent_menu_in_tray()
+    
+    def on_wallpaper_selected(self, wallpaper_path):
+        """Handle wallpaper selection from gallery"""
+        self.update_recent_menu_in_tray()
+    
+    def toggle_auto_change(self):
+        """Toggle automatic wallpaper change"""
+        enabled = self.auto_change_action.isChecked()
+        self.config_manager.set('auto_change_enabled', enabled)
+        self.update_auto_change_timer()
+        self.update_auto_change_action()
+        
+        if enabled:
+            self.show_notification("Automatic wallpaper change enabled")
+        else:
+            self.show_notification("Automatic wallpaper change disabled")
+    
+    def update_auto_change_action(self):
+        """Update auto-change action text"""
+        if self.config_manager.get('auto_change_enabled', False):
+            self.auto_change_action.setText("⏸️ Disable Auto-Change")
+        else:
+            self.auto_change_action.setText("▶️ Enable Auto-Change")
+    
+    def update_auto_change_timer(self):
+        """Update auto-change timer based on settings"""
+        if self.config_manager.get('auto_change_enabled', False):
+            interval = self.config_manager.get('change_interval', 30)
+            self.auto_change_timer.start(interval * 60 * 1000)  # Convert to milliseconds
+        else:
+            self.auto_change_timer.stop()
+    
+    def auto_change_wallpaper(self):
+        """Automatically change wallpaper"""
+        wallpaper = self.wallpaper_manager.next_wallpaper()
+        if wallpaper:
+            self.show_notification(f"Wallpaper changed to: {wallpaper.name}")
+            self.update_recent_menu_in_tray()
+    
+    def update_time_display(self):
+        """Update time until next change display"""
+        if not self.config_manager.get('auto_change_enabled', False):
+            self.time_action.setText("Next change: Disabled")
+            return
+        
+        remaining = self.auto_change_timer.remainingTime()
+        if remaining > 0:
+            minutes = remaining // 60000
+            seconds = (remaining % 60000) // 1000
+            
+            if minutes > 0:
+                self.time_action.setText(f"Next change: {minutes}m {seconds}s")
+            else:
+                self.time_action.setText(f"Next change: {seconds}s")
+        else:
+            self.time_action.setText("Next change: Any moment...")
+    
+    def update_recent_menu_in_tray(self):
+        """Update the recent wallpapers menu in tray"""
+        # Find the recent menu and update it
+        for action in self.tray_menu.actions():
+            if action.menu() and action.text() == "📜 Recent Wallpapers":
+                self.update_recent_menu(action.menu())
+                break
+    
+    def clear_history(self):
+        """Clear wallpaper history"""
+        self.config_manager.clear_history()
+        self.update_recent_menu_in_tray()
+        self.show_notification("Wallpaper history cleared")
+    
+    def show_notification(self, message):
+        """Show system tray notification"""
+        if self.config_manager.get('show_notifications', True):
+            self.tray_icon.showMessage(
+                "Wallpaper Changer",
+                message,
+                QSystemTrayIcon.MessageIcon.Information,
+                3000
+            )
+    
+    def quit_app(self):
+        """Quit the application"""
+        # Save any pending configuration
+        self.config_manager.save_config()
+        
+        # Close windows
+        if self.gallery_window:
+            self.gallery_window.close()
+        
+        # Quit application
+        self.quit()
+
+
+def main():
+    """Main entry point"""
+    try:
+        # Create application first
+        app = WallpaperChangerApp(sys.argv)
+        app.setApplicationName("Wallpaper Changer")
+        app.setApplicationDisplayName("Wallpaper Changer")
+        
+        # Check if system tray is available
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            print("System tray is not available on this system")
+            sys.exit(1)
+        
+        sys.exit(app.exec())
+    except Exception as e:
+        print(f"Error starting application: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()
