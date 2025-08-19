@@ -6,6 +6,7 @@ import json
 import os
 import random
 import subprocess
+import shutil
 from pathlib import Path
 from typing import List, Optional, Tuple
 try:
@@ -27,6 +28,9 @@ class WallpaperManager:
         # Quickshell config path
         config_home = os.environ.get('XDG_CONFIG_HOME', str(Path.home() / '.config'))
         self.shell_config_file = Path(config_home) / 'illogical-impulse' / 'config.json'
+        
+        # Color generation script path
+        self.switchwall_script = Path(config_home) / 'quickshell' / 'ii' / 'scripts' / 'colors' / 'switchwall.sh'
         
         # Load initial wallpaper list
         self.refresh_wallpaper_list()
@@ -59,6 +63,41 @@ class WallpaperManager:
         if not self.wallpaper_list:
             self.refresh_wallpaper_list()
         return self.wallpaper_list
+    
+    def trigger_color_generation(self, wallpaper_path: Path) -> bool:
+        """Trigger Material Design color generation from wallpaper"""
+        if not self.switchwall_script.exists():
+            print(f"Color generation script not found: {self.switchwall_script}")
+            return False
+        
+        # Check if matugen is installed
+        if not shutil.which('matugen'):
+            print("matugen not found. Color generation requires matugen to be installed.")
+            return False
+        
+        try:
+            # Call the switchwall.sh script with the wallpaper path
+            # The script expects the wallpaper path as the first argument
+            result = subprocess.run(
+                [str(self.switchwall_script), str(wallpaper_path)],
+                capture_output=True,
+                text=True,
+                timeout=30  # 30 second timeout for color generation
+            )
+            
+            if result.returncode == 0:
+                print(f"Color scheme generated successfully for {wallpaper_path.name}")
+                return True
+            else:
+                print(f"Error generating color scheme: {result.stderr}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            print("Color generation timed out")
+            return False
+        except Exception as e:
+            print(f"Error triggering color generation: {e}")
+            return False
     
     def set_wallpaper(self, wallpaper_path: Path) -> bool:
         """Set the wallpaper using jq to modify Quickshell config"""
@@ -94,6 +133,10 @@ class WallpaperManager:
                 # Update current index if wallpaper is in list
                 if wallpaper_path in self.wallpaper_list:
                     self.current_index = self.wallpaper_list.index(wallpaper_path)
+                
+                # Trigger color generation if enabled
+                if self.config.get('sync_color_scheme', True):
+                    self.trigger_color_generation(wallpaper_path)
                 
                 return True
             else:

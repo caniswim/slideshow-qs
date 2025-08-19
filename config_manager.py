@@ -47,6 +47,7 @@ class ConfigManager:
             'cache_thumbnails': True,
             'recent_wallpapers_limit': 20,
             'excluded_files': [],
+            'sync_color_scheme': True,  # Enable Material Design color generation from wallpaper
             'window_geometry': {
                 'x': 100,
                 'y': 100,

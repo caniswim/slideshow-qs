@@ -70,6 +70,11 @@ class SettingsDialog(QDialog):
         self.notifications_check = QCheckBox("Show notifications")
         layout.addWidget(self.notifications_check)
         
+        # Color sync checkbox
+        self.color_sync_check = QCheckBox("Sync color scheme with wallpaper")
+        self.color_sync_check.setToolTip("Generate Material Design colors from wallpaper (requires matugen)")
+        layout.addWidget(self.color_sync_check)
+        
         layout.addStretch()
         
         # Buttons
@@ -90,6 +95,7 @@ class SettingsDialog(QDialog):
         self.auto_change_check.setChecked(self.config.get('auto_change_enabled', False))
         self.shuffle_check.setChecked(self.config.get('shuffle', True))
         self.notifications_check.setChecked(self.config.get('show_notifications', True))
+        self.color_sync_check.setChecked(self.config.get('sync_color_scheme', True))
     
     def browse_directory(self):
         """Browse for wallpaper directory"""
@@ -107,7 +113,8 @@ class SettingsDialog(QDialog):
             'change_interval': self.interval_spin.value(),
             'auto_change_enabled': self.auto_change_check.isChecked(),
             'shuffle': self.shuffle_check.isChecked(),
-            'show_notifications': self.notifications_check.isChecked()
+            'show_notifications': self.notifications_check.isChecked(),
+            'sync_color_scheme': self.color_sync_check.isChecked()
         })
         self.accept()
 
@@ -144,6 +151,9 @@ class WallpaperChangerApp(QApplication):
         
         self.last_change_time = 0
         self.time_until_next = 0
+        
+        # Check for command line arguments via environment
+        self.check_startup_actions()
     
     def create_tray_icon(self):
         """Create system tray icon and menu"""
@@ -490,6 +500,18 @@ class WallpaperChangerApp(QApplication):
                 QSystemTrayIcon.MessageIcon.Information,
                 3000
             )
+    
+    def check_startup_actions(self):
+        """Check for startup actions from environment variables"""
+        if os.environ.get('WALLPAPER_CHANGER_OPEN_GALLERY'):
+            QTimer.singleShot(100, self.show_gallery)
+            del os.environ['WALLPAPER_CHANGER_OPEN_GALLERY']
+        elif os.environ.get('WALLPAPER_CHANGER_OPEN_SETTINGS'):
+            QTimer.singleShot(100, self.show_settings)
+            del os.environ['WALLPAPER_CHANGER_OPEN_SETTINGS']
+        elif os.environ.get('WALLPAPER_CHANGER_CHANGE_NOW'):
+            QTimer.singleShot(100, self.change_wallpaper_now)
+            del os.environ['WALLPAPER_CHANGER_CHANGE_NOW']
     
     def quit_app(self):
         """Quit the application"""
