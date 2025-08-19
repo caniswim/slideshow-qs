@@ -58,7 +58,8 @@ class ConfigManager:
                 'previous_wallpaper': 'Ctrl+Left',
                 'random_wallpaper': 'Ctrl+R',
                 'open_gallery': 'Ctrl+G',
-                'toggle_auto_change': 'Ctrl+Space'
+                'toggle_auto_change': 'Ctrl+Space',
+                'exclude_current': 'Ctrl+X'
             }
         }
     

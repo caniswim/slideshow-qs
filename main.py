@@ -201,6 +201,14 @@ class WallpaperChangerApp(QApplication):
         
         menu.addSeparator()
         
+        # Exclude current wallpaper
+        exclude_action = QAction("🚫 Exclude Current Wallpaper", menu)
+        exclude_action.setToolTip("Remove current wallpaper from rotation")
+        exclude_action.triggered.connect(self.exclude_current_wallpaper)
+        menu.addAction(exclude_action)
+        
+        menu.addSeparator()
+        
         # Open gallery
         gallery_action = QAction("🖼️ Open Gallery", menu)
         gallery_action.triggered.connect(self.show_gallery)
@@ -226,6 +234,10 @@ class WallpaperChangerApp(QApplication):
         # Recent wallpapers submenu
         recent_menu = menu.addMenu("📜 Recent Wallpapers")
         self.update_recent_menu(recent_menu)
+        
+        # Excluded wallpapers submenu
+        excluded_menu = menu.addMenu("🚫 Excluded Wallpapers")
+        self.update_excluded_menu(excluded_menu)
         
         menu.addSeparator()
         
@@ -262,6 +274,35 @@ class WallpaperChangerApp(QApplication):
                 clear_action = QAction("Clear History", recent_menu)
                 clear_action.triggered.connect(self.clear_history)
                 recent_menu.addAction(clear_action)
+    
+    def update_excluded_menu(self, excluded_menu):
+        """Update excluded wallpapers menu"""
+        excluded_menu.clear()
+        
+        excluded = self.config_manager.get('excluded_files', [])
+        if not excluded:
+            action = QAction("No excluded wallpapers", excluded_menu)
+            action.setEnabled(False)
+            excluded_menu.addAction(action)
+        else:
+            for file_path in excluded[:10]:  # Show first 10
+                path = Path(file_path)
+                action = QAction(f"✓ {path.name}", excluded_menu)
+                action.setToolTip("Click to restore this wallpaper")
+                action.triggered.connect(lambda checked, p=file_path: self.restore_wallpaper(p))
+                excluded_menu.addAction(action)
+            
+            if len(excluded) > 10:
+                excluded_menu.addSeparator()
+                more_action = QAction(f"... and {len(excluded) - 10} more", excluded_menu)
+                more_action.setEnabled(False)
+                excluded_menu.addAction(more_action)
+            
+            if excluded:
+                excluded_menu.addSeparator()
+                clear_action = QAction("Restore All", excluded_menu)
+                clear_action.triggered.connect(self.clear_excluded)
+                excluded_menu.addAction(clear_action)
     
     def on_tray_activated(self, reason):
         """Handle tray icon activation"""
@@ -328,6 +369,19 @@ class WallpaperChangerApp(QApplication):
         if wallpaper:
             self.show_notification(f"Wallpaper changed to: {wallpaper.name}")
             self.update_recent_menu_in_tray()
+    
+    def exclude_current_wallpaper(self):
+        """Exclude current wallpaper from rotation"""
+        current = self.wallpaper_manager.get_current_wallpaper()
+        if current:
+            if self.wallpaper_manager.exclude_current_wallpaper():
+                self.show_notification(f"Excluded: {current.name}")
+                # Change to next wallpaper after excluding
+                self.next_wallpaper()
+            else:
+                self.show_notification("Failed to exclude wallpaper")
+        else:
+            self.show_notification("No wallpaper currently set")
     
     def set_wallpaper(self, wallpaper_path):
         """Set specific wallpaper"""
@@ -398,6 +452,28 @@ class WallpaperChangerApp(QApplication):
             if action.menu() and action.text() == "📜 Recent Wallpapers":
                 self.update_recent_menu(action.menu())
                 break
+    
+    def update_excluded_menu_in_tray(self):
+        """Update the excluded wallpapers menu in tray"""
+        # Find the excluded menu and update it
+        for action in self.tray_menu.actions():
+            if action.menu() and action.text() == "🚫 Excluded Wallpapers":
+                self.update_excluded_menu(action.menu())
+                break
+    
+    def restore_wallpaper(self, file_path: str):
+        """Restore an excluded wallpaper"""
+        self.config_manager.toggle_file_exclusion(file_path)
+        self.wallpaper_manager.refresh_wallpaper_list()
+        path = Path(file_path)
+        self.show_notification(f"Restored: {path.name}")
+        self.update_excluded_menu_in_tray()
+    
+    def clear_excluded(self):
+        """Clear all excluded wallpapers"""
+        self.wallpaper_manager.clear_excluded_files()
+        self.update_excluded_menu_in_tray()
+        self.show_notification("All wallpapers restored")
     
     def clear_history(self):
         """Clear wallpaper history"""

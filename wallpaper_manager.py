@@ -249,6 +249,15 @@ class WallpaperManager:
                 recent.append(path)
         return recent
     
+    def exclude_current_wallpaper(self) -> bool:
+        """Exclude the current wallpaper from rotation"""
+        current = self.get_current_wallpaper()
+        if current:
+            self.config.toggle_file_exclusion(str(current))
+            self.refresh_wallpaper_list()
+            return True
+        return False
+    
     def clear_excluded_files(self):
         """Clear all excluded files"""
         self.config.set('excluded_files', [])
