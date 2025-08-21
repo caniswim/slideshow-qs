@@ -48,6 +48,8 @@ class ConfigManager:
             'recent_wallpapers_limit': 20,
             'excluded_files': [],
             'sync_color_scheme': True,  # Enable Material Design color generation from wallpaper
+            'random_mode': 'smart',  # 'pure' (pure random), 'smart' (avoid recent), 'sequential' (shuffle all)
+            'avoid_recent_percentage': 25,  # Percentage of wallpapers to avoid repeating in smart mode
             'window_geometry': {
                 'x': 100,
                 'y': 100,

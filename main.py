@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QDialog,
     QVBoxLayout, QHBoxLayout, QLabel, QSpinBox,
     QPushButton, QFileDialog, QCheckBox, QDialogButtonBox,
-    QMessageBox
+    QMessageBox, QComboBox, QGroupBox, QSlider
 )
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QIcon, QAction, QPixmap
@@ -75,6 +75,47 @@ class SettingsDialog(QDialog):
         self.color_sync_check.setToolTip("Generate Material Design colors from wallpaper (requires matugen)")
         layout.addWidget(self.color_sync_check)
         
+        # Random mode settings group
+        random_group = QGroupBox("Random Mode Settings")
+        random_layout = QVBoxLayout()
+        
+        # Random mode selector
+        mode_layout = QHBoxLayout()
+        mode_layout.addWidget(QLabel("Random Mode:"))
+        self.random_mode_combo = QComboBox()
+        self.random_mode_combo.addItems([
+            "Smart Random (Avoid Recent)",
+            "Pure Random",
+            "Sequential Shuffle"
+        ])
+        self.random_mode_combo.setToolTip(
+            "Smart: Avoids recently shown wallpapers\n"
+            "Pure: Completely random selection\n"
+            "Sequential: Shows all wallpapers before repeating"
+        )
+        mode_layout.addWidget(self.random_mode_combo)
+        random_layout.addLayout(mode_layout)
+        
+        # Avoid recent percentage slider
+        self.avoid_label = QLabel("Avoid Recent: 25%")
+        random_layout.addWidget(self.avoid_label)
+        
+        self.avoid_slider = QSlider(Qt.Orientation.Horizontal)
+        self.avoid_slider.setMinimum(10)
+        self.avoid_slider.setMaximum(50)
+        self.avoid_slider.setValue(25)
+        self.avoid_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.avoid_slider.setTickInterval(10)
+        self.avoid_slider.valueChanged.connect(self.on_avoid_slider_changed)
+        self.avoid_slider.setToolTip("Percentage of wallpapers to avoid repeating in Smart Random mode")
+        random_layout.addWidget(self.avoid_slider)
+        
+        random_group.setLayout(random_layout)
+        layout.addWidget(random_group)
+        
+        # Connect combo box change to enable/disable slider
+        self.random_mode_combo.currentIndexChanged.connect(self.on_random_mode_changed)
+        
         layout.addStretch()
         
         # Buttons
@@ -88,6 +129,16 @@ class SettingsDialog(QDialog):
         
         self.setLayout(layout)
     
+    def on_avoid_slider_changed(self, value):
+        """Update label when slider changes"""
+        self.avoid_label.setText(f"Avoid Recent: {value}%")
+    
+    def on_random_mode_changed(self, index):
+        """Enable/disable slider based on random mode"""
+        # Enable slider only for Smart Random mode (index 0)
+        self.avoid_slider.setEnabled(index == 0)
+        self.avoid_label.setEnabled(index == 0)
+    
     def load_settings(self):
         """Load current settings"""
         self.dir_label.setText(self.config.get('wallpaper_directory', ''))
@@ -96,6 +147,19 @@ class SettingsDialog(QDialog):
         self.shuffle_check.setChecked(self.config.get('shuffle', True))
         self.notifications_check.setChecked(self.config.get('show_notifications', True))
         self.color_sync_check.setChecked(self.config.get('sync_color_scheme', True))
+        
+        # Load random mode settings
+        mode = self.config.get('random_mode', 'smart')
+        mode_index = {'smart': 0, 'pure': 1, 'sequential': 2}.get(mode, 0)
+        self.random_mode_combo.setCurrentIndex(mode_index)
+        
+        avoid_percentage = self.config.get('avoid_recent_percentage', 25)
+        self.avoid_slider.setValue(avoid_percentage)
+        self.avoid_label.setText(f"Avoid Recent: {avoid_percentage}%")
+        
+        # Enable/disable slider based on mode
+        self.avoid_slider.setEnabled(mode_index == 0)
+        self.avoid_label.setEnabled(mode_index == 0)
     
     def browse_directory(self):
         """Browse for wallpaper directory"""
@@ -108,13 +172,19 @@ class SettingsDialog(QDialog):
     
     def save_settings(self):
         """Save settings and close"""
+        # Map combo box index to mode string
+        mode_map = {0: 'smart', 1: 'pure', 2: 'sequential'}
+        random_mode = mode_map.get(self.random_mode_combo.currentIndex(), 'smart')
+        
         self.config.update({
             'wallpaper_directory': self.dir_label.text(),
             'change_interval': self.interval_spin.value(),
             'auto_change_enabled': self.auto_change_check.isChecked(),
             'shuffle': self.shuffle_check.isChecked(),
             'show_notifications': self.notifications_check.isChecked(),
-            'sync_color_scheme': self.color_sync_check.isChecked()
+            'sync_color_scheme': self.color_sync_check.isChecked(),
+            'random_mode': random_mode,
+            'avoid_recent_percentage': self.avoid_slider.value()
         })
         self.accept()
 
@@ -241,6 +311,19 @@ class WallpaperChangerApp(QApplication):
         
         menu.addSeparator()
         
+        # Session stats
+        stats_action = QAction("📊 Session Statistics", menu)
+        stats_action.triggered.connect(self.show_session_stats)
+        menu.addAction(stats_action)
+        
+        # Reset session tracking
+        reset_action = QAction("🔄 Reset Session Tracking", menu)
+        reset_action.setToolTip("Start fresh with wallpaper randomization")
+        reset_action.triggered.connect(self.reset_session_tracking)
+        menu.addAction(reset_action)
+        
+        menu.addSeparator()
+        
         # Recent wallpapers submenu
         recent_menu = menu.addMenu("📜 Recent Wallpapers")
         self.update_recent_menu(recent_menu)
@@ -339,6 +422,49 @@ class WallpaperChangerApp(QApplication):
             self.update_auto_change_timer()
             self.update_auto_change_action()
     
+    def show_session_stats(self):
+        """Show session statistics dialog"""
+        stats = self.wallpaper_manager.get_session_stats()
+        
+        mode_names = {
+            'smart': 'Smart Random',
+            'pure': 'Pure Random',
+            'sequential': 'Sequential Shuffle'
+        }
+        
+        message = (
+            f"<h3>Session Statistics</h3>"
+            f"<p><b>Random Mode:</b> {mode_names.get(stats['random_mode'], stats['random_mode'])}</p>"
+            f"<p><b>Total Wallpapers:</b> {stats['total_wallpapers']}</p>"
+            f"<p><b>Shown This Session:</b> {stats['session_shown']}</p>"
+            f"<p><b>Not Yet Shown:</b> {stats['unused_wallpapers']}</p>"
+            f"<p><b>Recently Avoided:</b> {stats['recent_avoided']}</p>"
+            f"<p><b>Avoid Percentage:</b> {stats['avoid_percentage']}%</p>"
+        )
+        
+        if stats['random_mode'] == 'sequential' and stats['unused_wallpapers'] == 0:
+            message += "<p><i>All wallpapers shown! Will reshuffle on next change.</i></p>"
+        elif stats['random_mode'] == 'smart' and stats['unused_wallpapers'] < 5:
+            message += f"<p><i>Only {stats['unused_wallpapers']} new wallpapers left!</i></p>"
+        
+        QMessageBox.information(None, "Session Statistics", message)
+    
+    def reset_session_tracking(self):
+        """Reset session tracking for fresh randomization"""
+        reply = QMessageBox.question(
+            None,
+            "Reset Session Tracking",
+            "This will reset the tracking of shown wallpapers.\n"
+            "All wallpapers will be considered 'unshown' again.\n\n"
+            "Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.wallpaper_manager.reset_session_tracking()
+            self.show_notification("Session tracking reset successfully")
+    
     def show_about(self):
         """Show about dialog"""
         QMessageBox.about(
@@ -351,9 +477,11 @@ class WallpaperChangerApp(QApplication):
             "<li>System tray integration</li>"
             "<li>Visual gallery with preview</li>"
             "<li>Automatic wallpaper changes</li>"
+            "<li>Smart randomization modes</li>"
+            "<li>Material Design color generation</li>"
             "<li>Thumbnail caching</li>"
             "</ul>"
-            "<p>Version 2.0</p>"
+            "<p>Version 2.1</p>"
         )
     
     def change_wallpaper_now(self):
