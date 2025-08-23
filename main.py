@@ -8,6 +8,11 @@ from pathlib import Path
 
 # Set environment variable to avoid conflicts
 os.environ['QT_QPA_PLATFORM'] = 'xcb'
+
+# Enable high-DPI scaling for better quality
+os.environ['QT_ENABLE_HIGHDPI_SCALING'] = '1'
+os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
+
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QDialog,
     QVBoxLayout, QHBoxLayout, QLabel, QSpinBox,
@@ -19,7 +24,7 @@ from PyQt6.QtGui import QIcon, QAction, QPixmap
 
 from config_manager import ConfigManager
 from wallpaper_manager import WallpaperManager
-from gallery_window import GalleryWindow
+from gallery_window_modern import ModernGalleryWindow
 
 
 class SettingsDialog(QDialog):
@@ -405,7 +410,7 @@ class WallpaperChangerApp(QApplication):
     def show_gallery(self):
         """Show gallery window"""
         if not self.gallery_window:
-            self.gallery_window = GalleryWindow(self.config_manager, self.wallpaper_manager)
+            self.gallery_window = ModernGalleryWindow(self.config_manager, self.wallpaper_manager)
             self.gallery_window.wallpaper_selected.connect(self.on_wallpaper_selected)
         
         self.gallery_window.show()
@@ -657,6 +662,11 @@ class WallpaperChangerApp(QApplication):
 def main():
     """Main entry point"""
     try:
+        # Enable high-DPI support before creating the app
+        QApplication.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
+        
         # Create application first
         app = WallpaperChangerApp(sys.argv)
         app.setApplicationName("Wallpaper Changer")

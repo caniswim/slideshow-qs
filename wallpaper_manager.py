@@ -333,10 +333,11 @@ class WallpaperManager:
                     img = img.convert('RGB')
                 
                 # Calculate thumbnail size maintaining aspect ratio
-                img.thumbnail((size, size), Image.Resampling.LANCZOS)
+                # Use higher quality resampling for HD thumbnails
+                img.thumbnail((size * 2, size * 2), Image.Resampling.LANCZOS)
                 
-                # Save thumbnail
-                img.save(cache_path, 'JPEG', quality=85, optimize=True)
+                # Save thumbnail with maximum quality
+                img.save(cache_path, 'PNG', optimize=True)  # PNG for lossless quality
                 return cache_path
                 
         except Exception as e:

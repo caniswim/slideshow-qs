@@ -1,56 +1,140 @@
 #!/bin/bash
-
+#
 # Wallpaper Changer Installation Script for Arch Linux
+#
 
-echo "Installing Quickshell Wallpaper Changer..."
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Installation directories
+INSTALL_DIR="/usr/local/share/wallpaper-changer"
+BIN_DIR="/usr/local/bin"
+DESKTOP_DIR="/usr/share/applications"
+SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
+
+echo -e "${GREEN}===================================${NC}"
+echo -e "${GREEN}Wallpaper Changer Installation${NC}"
+echo -e "${GREEN}===================================${NC}"
+echo
 
 # Check if running on Arch Linux
 if [ ! -f /etc/arch-release ]; then
-    echo "Warning: This script is designed for Arch Linux"
+    echo -e "${YELLOW}Warning: This script is designed for Arch Linux${NC}"
+    read -p "Continue anyway? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
 fi
 
-# Install system dependencies
-echo "Installing system dependencies..."
-sudo pacman -S --needed python python-gobject gtk4 libadwaita jq
+# Check for required dependencies
+echo -e "${GREEN}Checking dependencies...${NC}"
+MISSING_DEPS=""
 
-# Install Python dependencies
-echo "Installing Python dependencies..."
-pip install --user -r requirements.txt
+# Check Python
+if ! command -v python3 &> /dev/null; then
+    MISSING_DEPS="$MISSING_DEPS python"
+fi
 
-# Create local bin directory if it doesn't exist
-mkdir -p ~/.local/bin
+# Check jq
+if ! command -v jq &> /dev/null; then
+    MISSING_DEPS="$MISSING_DEPS jq"
+fi
 
-# Copy main application
-echo "Installing application files..."
-cp wallpaper_changer.py ~/.local/bin/
-chmod +x ~/.local/bin/wallpaper_changer.py
+# Check PyQt6
+if ! python3 -c "import PyQt6" 2>/dev/null; then
+    MISSING_DEPS="$MISSING_DEPS python-pyqt6"
+fi
 
-# Copy daemon
-cp wallpaper_changer_daemon.py ~/.local/bin/wallpaper-changer-daemon
-chmod +x ~/.local/bin/wallpaper-changer-daemon
+# Check Pillow
+if ! python3 -c "import PIL" 2>/dev/null; then
+    MISSING_DEPS="$MISSING_DEPS python-pillow"
+fi
 
-# Install systemd service
-echo "Installing systemd service..."
-mkdir -p ~/.config/systemd/user/
-cp wallpaper-changer.service ~/.config/systemd/user/
-systemctl --user daemon-reload
+if [ ! -z "$MISSING_DEPS" ]; then
+    echo -e "${YELLOW}Missing dependencies:${MISSING_DEPS}${NC}"
+    echo -e "${GREEN}Installing dependencies...${NC}"
+    sudo pacman -S --needed $MISSING_DEPS
+fi
+
+# Create installation directory
+echo -e "${GREEN}Creating installation directories...${NC}"
+sudo mkdir -p "$INSTALL_DIR"
+sudo mkdir -p "$INSTALL_DIR/assets"
+
+# Copy application files
+echo -e "${GREEN}Installing application files...${NC}"
+sudo cp main.py "$INSTALL_DIR/"
+sudo cp gallery_window.py "$INSTALL_DIR/"
+sudo cp gallery_window_modern.py "$INSTALL_DIR/"
+sudo cp wallpaper_manager.py "$INSTALL_DIR/"
+sudo cp config_manager.py "$INSTALL_DIR/"
+
+# Copy assets if they exist
+if [ -d "assets" ]; then
+    sudo cp -r assets/* "$INSTALL_DIR/assets/" 2>/dev/null || true
+fi
+
+# Install launcher script
+echo -e "${GREEN}Installing launcher script...${NC}"
+sudo cp wallpaper-changer "$BIN_DIR/"
+sudo chmod +x "$BIN_DIR/wallpaper-changer"
 
 # Install desktop entry
-echo "Installing desktop entry..."
-mkdir -p ~/.local/share/applications/
-cp wallpaper-changer.desktop ~/.local/share/applications/
+echo -e "${GREEN}Installing desktop entry...${NC}"
+sudo cp wallpaper-changer.desktop "$DESKTOP_DIR/"
+sudo chmod 644 "$DESKTOP_DIR/wallpaper-changer.desktop"
 
 # Update desktop database
-update-desktop-database ~/.local/share/applications/
+echo -e "${GREEN}Updating desktop database...${NC}"
+if command -v update-desktop-database &> /dev/null; then
+    sudo update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
+fi
 
-echo "Installation complete!"
-echo ""
-echo "You can now:"
-echo "1. Run the GUI: python3 ~/.local/bin/wallpaper_changer.py"
-echo "2. Or find 'Wallpaper Changer' in your application menu"
-echo ""
-echo "To enable the background service:"
-echo "  systemctl --user enable --now wallpaper-changer.service"
-echo ""
-echo "To check service status:"
-echo "  systemctl --user status wallpaper-changer.service"
+# Create systemd service for autostart (optional)
+echo
+read -p "Do you want to enable autostart on login? (y/N) " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo -e "${GREEN}Creating systemd user service...${NC}"
+    
+    mkdir -p "$SYSTEMD_USER_DIR"
+    
+    cat > "$SYSTEMD_USER_DIR/wallpaper-changer.service" << EOF
+[Unit]
+Description=Wallpaper Changer System Tray Application
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=$BIN_DIR/wallpaper-changer
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+
+    systemctl --user daemon-reload
+    systemctl --user enable wallpaper-changer.service
+    echo -e "${GREEN}Autostart enabled!${NC}"
+    echo -e "To start now: ${YELLOW}systemctl --user start wallpaper-changer.service${NC}"
+fi
+
+echo
+echo -e "${GREEN}===================================${NC}"
+echo -e "${GREEN}Installation completed!${NC}"
+echo -e "${GREEN}===================================${NC}"
+echo
+echo -e "You can now:"
+echo -e "1. Find 'Wallpaper Changer' in your application launcher"
+echo -e "2. Run ${YELLOW}wallpaper-changer${NC} from terminal"
+echo -e "3. Right-click on the desktop entry for quick actions"
+echo
+echo -e "The application will run in the system tray."
+echo -e "${YELLOW}Note: You may need to log out and back in for the launcher to detect the app.${NC}"
