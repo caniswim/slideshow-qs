@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""
+Wallpaper Changer launcher script
+"""
+import sys
+import os
+from pathlib import Path
+
+# Add the application directory to Python path
+app_dir = Path("/usr/local/share/wallpaper-changer")
+if app_dir.exists():
+    sys.path.insert(0, str(app_dir))
+
+# Handle command line arguments
+if len(sys.argv) > 1:
+    if sys.argv[1] == "--gallery":
+        os.environ['WALLPAPER_CHANGER_OPEN_GALLERY'] = '1'
+    elif sys.argv[1] == "--settings":
+        os.environ['WALLPAPER_CHANGER_OPEN_SETTINGS'] = '1'
+    elif sys.argv[1] == "--change-now":
+        os.environ['WALLPAPER_CHANGER_CHANGE_NOW'] = '1'
+
+# Import and run the main application
+from main import main
+
+if __name__ == '__main__':
+    main()

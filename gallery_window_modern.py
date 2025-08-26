@@ -390,7 +390,7 @@ class ModernThumbnailCard(QFrame):
     double_clicked = pyqtSignal(Path)
     right_clicked = pyqtSignal(Path, QPoint)
     
-    def __init__(self, image_path: Path, size: int = 200):
+    def __init__(self, image_path: Path, size: int = 200, wallpaper_manager=None):
         super().__init__()
         self.image_path = image_path
         self.size = size
@@ -403,6 +403,22 @@ class ModernThumbnailCard(QFrame):
         self.colors = ThemeManager.get_colors()
         self.preview_loaded = False
         self.hd_loaded = False
+        self.wallpaper_manager = wallpaper_manager
+        self.classification = 'medium'  # Default classification
+        
+        # Get classification if wallpaper_manager is available
+        if self.wallpaper_manager:
+            try:
+                # Try to get from metadata cache first (fast)
+                metadata = self.wallpaper_manager.metadata_manager.get_wallpaper_metadata(str(image_path))
+                if metadata:
+                    self.classification = metadata.get('classification', 'medium')
+                else:
+                    # No metadata, use default (will analyze later in batch)
+                    self.classification = 'medium'
+            except Exception as e:
+                print(f"[CARD] ERROR getting classification: {e}")
+                self.classification = 'medium'
         
         self.setup_ui()
         self.setup_animations()
@@ -442,6 +458,10 @@ class ModernThumbnailCard(QFrame):
         
         # Loading placeholder
         self.set_loading_state()
+        
+        # Luminosity badge (positioned over the image)
+        self.luminosity_badge = QLabel(self.image_container)
+        self.setup_luminosity_badge()
         
         layout.addWidget(self.image_container)
         
@@ -581,6 +601,47 @@ class ModernThumbnailCard(QFrame):
         else:
             self.setEnabled(True)
             self.apply_card_style()
+    
+    def setup_luminosity_badge(self):
+        """Setup luminosity classification badge"""
+        badge_size = 24
+        self.luminosity_badge.setFixedSize(badge_size, badge_size)
+        
+        # Position badge in top-right corner
+        self.luminosity_badge.move(self.size - badge_size - 5, 5)
+        
+        # Style based on classification
+        badge_styles = {
+            'dark': {
+                'bg': '#1a1a1a',
+                'icon': '🌙',
+                'tooltip': 'Dark wallpaper (Night)'
+            },
+            'medium': {
+                'bg': '#666666',
+                'icon': '◐',
+                'tooltip': 'Medium luminosity (Transition)'
+            },
+            'light': {
+                'bg': '#e0e0e0',
+                'icon': '☀',
+                'tooltip': 'Light wallpaper (Day)'
+            }
+        }
+        
+        style = badge_styles.get(self.classification, badge_styles['medium'])
+        
+        self.luminosity_badge.setText(style['icon'])
+        self.luminosity_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.luminosity_badge.setToolTip(style['tooltip'])
+        self.luminosity_badge.setStyleSheet(f"""
+            QLabel {{
+                background-color: {style['bg']};
+                border-radius: {badge_size // 2}px;
+                font-size: 12px;
+                border: 1px solid rgba(255, 255, 255, 0.2);
+            }}
+        """)
     
     def update_status_indicators(self):
         """Update status indicator icons"""
@@ -951,6 +1012,27 @@ class FilterPanel(QFrame):
         self.size_combo.currentTextChanged.connect(self.on_filters_changed)
         layout.addWidget(self.size_combo)
         
+        # Luminosity filter
+        lum_label = QLabel("Filter:")
+        lum_label.setStyleSheet(f"color: {self.colors['text_primary']};")
+        layout.addWidget(lum_label)
+        
+        self.luminosity_combo = QComboBox()
+        self.luminosity_combo.addItems(["All", "Dark 🌙", "Medium ◐", "Light ☀"])
+        self.luminosity_combo.setCurrentText("All")
+        self.luminosity_combo.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {self.colors['input_bg']};
+                border: 1px solid {self.colors['input_border']};
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 14px;
+                color: {self.colors['text_primary']};
+            }}
+        """)
+        self.luminosity_combo.currentTextChanged.connect(self.on_filters_changed)
+        layout.addWidget(self.luminosity_combo)
+        
         layout.addStretch()
         
         # Filter toggles
@@ -982,6 +1064,7 @@ class FilterPanel(QFrame):
             'search': self.search_input.text(),
             'sort': self.sort_combo.currentText(),
             'size': self.size_combo.currentText(),
+            'luminosity': self.luminosity_combo.currentText(),
             'show_excluded': self.show_excluded.isChecked()
         }
         self.filters_changed.emit(filters)
@@ -1171,46 +1254,64 @@ class ModernGalleryWindow(QMainWindow):
     
     def load_wallpapers(self):
         """Load all wallpapers immediately - no lazy loading"""
+        print(f"[GALLERY] Starting load_wallpapers...")
+        
         # Clear existing
         self.clear_grid()
         self.thumbnail_cards.clear()
         
         # Get wallpapers
+        print(f"[GALLERY] Getting wallpaper list...")
         wallpapers = self.wallpaper_manager.get_wallpaper_list()
+        print(f"[GALLERY] Found {len(wallpapers)} wallpapers")
         
         if not wallpapers:
             self.status_bar.showMessage("No wallpapers found", 5000)
+            print(f"[GALLERY] No wallpapers found, returning")
             return
         
         # Get current wallpaper
         self.current_wallpaper = self.wallpaper_manager.get_current_wallpaper()
+        print(f"[GALLERY] Current wallpaper: {self.current_wallpaper}")
         
         # Get thumbnail size
         size = self.get_thumbnail_size()
+        print(f"[GALLERY] Thumbnail size: {size}")
         
         # Load all images
         self.status_bar.showMessage(f"Loading {len(wallpapers)} images...", 0)
         self.thumb_loader.load_batch(wallpapers, size)
         
         # Create all cards immediately
-        for wallpaper in wallpapers:
-            # Create modern card
-            card = ModernThumbnailCard(wallpaper, size)
-            card.clicked.connect(self.on_thumbnail_clicked)
-            card.double_clicked.connect(self.on_thumbnail_double_clicked)
-            card.right_clicked.connect(self.show_context_menu)
-            
-            # Mark current wallpaper
-            if wallpaper == self.current_wallpaper:
-                card.set_current(True)
-            
-            # Check if excluded
-            if self.config.is_file_excluded(str(wallpaper)):
-                card.set_excluded(True)
-            
-            # Add to flow layout for responsive display
-            self.flow_layout.addWidget(card)
-            self.thumbnail_cards[wallpaper] = card
+        print(f"[GALLERY] Creating {len(wallpapers)} cards...")
+        for i, wallpaper in enumerate(wallpapers):
+            try:
+                print(f"[GALLERY] Creating card {i+1}/{len(wallpapers)}: {wallpaper.name}")
+                
+                # Create modern card
+                card = ModernThumbnailCard(wallpaper, size, self.wallpaper_manager)
+                card.clicked.connect(self.on_thumbnail_clicked)
+                card.double_clicked.connect(self.on_thumbnail_double_clicked)
+                card.right_clicked.connect(self.show_context_menu)
+                
+                # Mark current wallpaper
+                if wallpaper == self.current_wallpaper:
+                    card.set_current(True)
+                    print(f"[GALLERY] Marked as current: {wallpaper.name}")
+                
+                # Check if excluded
+                if self.config.is_file_excluded(str(wallpaper)):
+                    card.set_excluded(True)
+                    print(f"[GALLERY] Marked as excluded: {wallpaper.name}")
+                
+                # Add to flow layout for responsive display
+                self.flow_layout.addWidget(card)
+                self.thumbnail_cards[wallpaper] = card
+                
+            except Exception as e:
+                print(f"[GALLERY] ERROR creating card for {wallpaper}: {e}")
+                import traceback
+                traceback.print_exc()
         
         # Process visible items first
         QTimer.singleShot(100, self.prioritize_visible)
@@ -1343,6 +1444,40 @@ class ModernGalleryWindow(QMainWindow):
         
         menu.addSeparator()
         
+        # Luminosity classification submenu
+        luminosity_menu = menu.addMenu("💡 Set Luminosity")
+        
+        # Get current classification
+        current_class = 'medium'
+        if self.wallpaper_manager:
+            metadata = self.wallpaper_manager.metadata_manager.get_wallpaper_metadata(str(image_path))
+            if metadata:
+                current_class = metadata.get('classification', 'medium')
+        
+        # Add classification options
+        dark_action = luminosity_menu.addAction("🌙 Dark")
+        dark_action.setCheckable(True)
+        dark_action.setChecked(current_class == 'dark')
+        dark_action.triggered.connect(lambda: self.set_luminosity_classification(image_path, 'dark'))
+        
+        medium_action = luminosity_menu.addAction("◐ Medium")
+        medium_action.setCheckable(True)
+        medium_action.setChecked(current_class == 'medium')
+        medium_action.triggered.connect(lambda: self.set_luminosity_classification(image_path, 'medium'))
+        
+        light_action = luminosity_menu.addAction("☀ Light")
+        light_action.setCheckable(True)
+        light_action.setChecked(current_class == 'light')
+        light_action.triggered.connect(lambda: self.set_luminosity_classification(image_path, 'light'))
+        
+        luminosity_menu.addSeparator()
+        
+        # Auto-detect option
+        auto_action = luminosity_menu.addAction("🔄 Auto-detect")
+        auto_action.triggered.connect(lambda: self.auto_detect_luminosity(image_path))
+        
+        menu.addSeparator()
+        
         # File operations
         info_action = menu.addAction("ℹ Properties")
         info_action.triggered.connect(lambda: self.show_properties(image_path))
@@ -1402,9 +1537,81 @@ class ModernGalleryWindow(QMainWindow):
             else:
                 self.status_bar.showMessage(f"✓ Included: {image_path.name}", 3000)
     
+    def set_luminosity_classification(self, image_path: Path, classification: str):
+        """Manually set luminosity classification for a wallpaper"""
+        if not self.wallpaper_manager:
+            return
+        
+        # Override classification in metadata
+        self.wallpaper_manager.override_wallpaper_classification(image_path, classification)
+        
+        # Update the card's visual indicator
+        if image_path in self.thumbnail_cards:
+            card = self.thumbnail_cards[image_path]
+            card.classification = classification
+            card.setup_luminosity_badge()
+        
+        # Show confirmation
+        icons = {'dark': '🌙', 'medium': '◐', 'light': '☀'}
+        self.status_bar.showMessage(
+            f"{icons.get(classification, '')} Set to {classification.capitalize()}: {image_path.name}", 
+            5000
+        )
+    
+    def auto_detect_luminosity(self, image_path: Path):
+        """Auto-detect luminosity for a wallpaper"""
+        if not self.wallpaper_manager:
+            return
+        
+        # Analyze the wallpaper
+        from wallpaper_analyzer import WallpaperAnalyzer
+        analyzer = WallpaperAnalyzer()
+        
+        self.status_bar.showMessage(f"Analyzing {image_path.name}...", 0)
+        
+        try:
+            result = analyzer.analyze_wallpaper(image_path)
+            if result:
+                # Update metadata but mark as not manually overridden
+                result['manual_override'] = False
+                self.wallpaper_manager.metadata_manager.update_wallpaper_metadata(str(image_path), result)
+                
+                # Update the card
+                if image_path in self.thumbnail_cards:
+                    card = self.thumbnail_cards[image_path]
+                    card.classification = result['classification']
+                    card.setup_luminosity_badge()
+                
+                # Show result
+                icons = {'dark': '🌙', 'medium': '◐', 'light': '☀'}
+                self.status_bar.showMessage(
+                    f"🔄 Auto-detected as {result['classification'].capitalize()} "
+                    f"(luminosity: {result['luminosity']:.2f}): {image_path.name}", 
+                    5000
+                )
+            else:
+                self.status_bar.showMessage(f"✗ Failed to analyze {image_path.name}", 5000)
+        except Exception as e:
+            self.status_bar.showMessage(f"✗ Error analyzing: {str(e)}", 5000)
+    
     def show_properties(self, image_path: Path):
         """Show image properties"""
         info = self.wallpaper_manager.get_image_info(image_path)
+        
+        # Get luminosity info if available
+        luminosity_info = ""
+        if self.wallpaper_manager:
+            metadata = self.wallpaper_manager.metadata_manager.get_wallpaper_metadata(str(image_path))
+            if metadata:
+                icons = {'dark': '🌙', 'medium': '◐', 'light': '☀'}
+                classification = metadata.get('classification', 'unknown')
+                luminosity = metadata.get('luminosity', 0)
+                is_manual = metadata.get('manual_override', False)
+                override_text = " (manual)" if is_manual else " (auto)"
+                luminosity_info = (
+                    f"<b>Luminosity:</b> {icons.get(classification, '')} "
+                    f"{classification.capitalize()} ({luminosity:.3f}){override_text}<br>"
+                )
         
         # Format properties
         from datetime import datetime
@@ -1416,7 +1623,8 @@ class ModernGalleryWindow(QMainWindow):
             f"<b>Dimensions:</b> {info['dimensions'][0]} × {info['dimensions'][1]} pixels<br>"
             f"<b>Size:</b> {info['size'] / 1024 / 1024:.2f} MB<br>"
             f"<b>Format:</b> {info['format']}<br>"
-            f"<b>Modified:</b> {modified}"
+            f"<b>Modified:</b> {modified}<br>"
+            f"{luminosity_info}"
         )
         
         # Show in message box
@@ -1432,6 +1640,7 @@ class ModernGalleryWindow(QMainWindow):
         search_text = filters['search'].lower()
         sort_by = filters['sort']
         size = filters['size']
+        luminosity = filters.get('luminosity', 'All')
         show_excluded = filters['show_excluded']
         
         # Update thumbnail size if changed
@@ -1439,15 +1648,40 @@ class ModernGalleryWindow(QMainWindow):
             self.load_wallpapers()
             return
         
+        # Map luminosity filter text to classification
+        luminosity_map = {
+            'All': None,
+            'Dark 🌙': 'dark',
+            'Medium ◐': 'medium',
+            'Light ☀': 'light'
+        }
+        lum_filter = luminosity_map.get(luminosity)
+        
         # Filter and sort
         visible_count = 0
         for path, card in self.thumbnail_cards.items():
+            visible = True
+            
             # Search filter
-            visible = search_text in path.name.lower()
+            if search_text and search_text not in path.name.lower():
+                visible = False
             
             # Exclusion filter
             if not show_excluded and card.is_excluded:
                 visible = False
+            
+            # Luminosity filter
+            if lum_filter and visible:
+                # Get classification from metadata or card
+                classification = card.classification
+                if self.wallpaper_manager:
+                    # Try to get actual classification from metadata
+                    metadata = self.wallpaper_manager.metadata_manager.get_wallpaper_metadata(str(path))
+                    if metadata:
+                        classification = metadata.get('classification', 'medium')
+                
+                if classification != lum_filter:
+                    visible = False
             
             card.setVisible(visible)
             if visible:

@@ -8,13 +8,16 @@ import random
 import subprocess
 import shutil
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 try:
     from PIL import Image
 except ImportError:
     print("Warning: Pillow not installed. Thumbnail creation disabled.")
     Image = None
 from config_manager import ConfigManager
+from wallpaper_metadata import WallpaperMetadata
+from wallpaper_analyzer import WallpaperAnalyzer
+from datetime import datetime
 
 
 class WallpaperManager:
@@ -29,6 +32,10 @@ class WallpaperManager:
         self.unused_wallpapers = []  # Wallpapers not yet shown in current cycle
         self.recent_wallpapers = []  # Recently shown wallpapers to avoid
         self.session_history = []    # All wallpapers shown in this session
+        
+        # Initialize metadata and analyzer
+        self.metadata_manager = WallpaperMetadata(self.config.config_dir)
+        self.analyzer = WallpaperAnalyzer(num_workers=4)
         
         # Quickshell config path
         config_home = os.environ.get('XDG_CONFIG_HOME', str(Path.home() / '.config'))
@@ -267,11 +274,43 @@ class WallpaperManager:
         
         return None
     
+    def get_time_based_wallpaper(self) -> Optional[Path]:
+        """Get a wallpaper suitable for current time of day"""
+        current_time = datetime.now().time()
+        
+        # Get wallpapers suitable for current time
+        suitable_paths = self.metadata_manager.get_wallpapers_for_current_time(current_time)
+        
+        if not suitable_paths:
+            # Fallback to any wallpaper if no time-based selection available
+            return self.get_smart_random_wallpaper()
+        
+        # Filter to only existing wallpapers in our list
+        available = []
+        for wallpaper in self.wallpaper_list:
+            if str(wallpaper) in suitable_paths:
+                # Also check if not in recent
+                if wallpaper not in self.recent_wallpapers:
+                    available.append(wallpaper)
+        
+        # If all suitable wallpapers are recent, use all suitable
+        if not available:
+            available = [w for w in self.wallpaper_list if str(w) in suitable_paths]
+        
+        if available:
+            return random.choice(available)
+        
+        return None
+    
     def random_wallpaper(self) -> Optional[Path]:
         """Set a random wallpaper based on configured mode"""
         mode = self.config.get('random_mode', 'smart')
+        time_based = self.config.get('time_based_enabled', False)
         
-        if mode == 'pure':
+        # If time-based selection is enabled, use that
+        if time_based:
+            wallpaper = self.get_time_based_wallpaper()
+        elif mode == 'pure':
             # Pure random - original behavior
             if not self.wallpaper_list:
                 self.refresh_wallpaper_list()
@@ -438,3 +477,46 @@ class WallpaperManager:
         self.unused_wallpapers = self.wallpaper_list.copy()
         self.recent_wallpapers = []
         self.session_history = []
+    
+    def analyze_wallpapers(self, progress_callback=None) -> Dict:
+        """Analyze all wallpapers in the directory"""
+        directory = Path(self.config.get('wallpaper_directory', Path.home() / 'Pictures'))
+        
+        # Analyze wallpapers
+        results = self.analyzer.analyze_directory(directory, progress_callback)
+        
+        # Update metadata
+        if results:
+            self.metadata_manager.update_batch_metadata(results)
+        
+        return results
+    
+    def get_wallpaper_classification(self, wallpaper_path: Path) -> str:
+        """Get classification for a specific wallpaper"""
+        metadata = self.metadata_manager.get_wallpaper_metadata(str(wallpaper_path))
+        if metadata:
+            return metadata.get('classification', 'medium')
+        
+        # Analyze if not in metadata
+        result = self.analyzer.analyze_wallpaper(wallpaper_path)
+        if result:
+            self.metadata_manager.update_wallpaper_metadata(str(wallpaper_path), result)
+            return result.get('classification', 'medium')
+        
+        return 'medium'
+    
+    def get_metadata_statistics(self) -> Dict:
+        """Get statistics about wallpaper metadata"""
+        return self.metadata_manager.get_statistics()
+    
+    def override_wallpaper_classification(self, wallpaper_path: Path, classification: str):
+        """Manually override wallpaper classification"""
+        self.metadata_manager.override_classification(str(wallpaper_path), classification)
+    
+    def get_time_schedules(self) -> Dict:
+        """Get current time schedules configuration"""
+        return self.metadata_manager.time_schedules
+    
+    def update_time_schedule(self, classification: str, time_ranges: List[Dict]):
+        """Update time schedule for a classification"""
+        self.metadata_manager.update_time_schedule(classification, time_ranges)

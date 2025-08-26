@@ -1,9 +1,24 @@
 [Desktop Entry]
-Name=Wallpaper Changer
-Comment=Periodic wallpaper changer for Quickshell
-Exec=python3 /usr/local/bin/wallpaper_changer.py
-Icon=preferences-desktop-wallpaper
-Terminal=false
+Version=1.0
 Type=Application
-Categories=Settings;DesktopSettings;Utility;
-Keywords=wallpaper;background;slideshow;quickshell;
+Name=Wallpaper Changer
+Comment=Visual wallpaper manager with system tray for Quickshell
+Icon=preferences-desktop-wallpaper
+Exec=/usr/local/bin/wallpaper-changer
+Terminal=false
+Categories=Utility;Settings;DesktopSettings;
+Keywords=wallpaper;background;slideshow;quickshell;gallery;tray;
+StartupNotify=false
+Actions=Gallery;Settings;ChangeNow;
+
+[Desktop Action Gallery]
+Name=Open Gallery
+Exec=/usr/local/bin/wallpaper-changer --gallery
+
+[Desktop Action Settings]  
+Name=Open Settings
+Exec=/usr/local/bin/wallpaper-changer --settings
+
+[Desktop Action ChangeNow]
+Name=Change Wallpaper Now
+Exec=/usr/local/bin/wallpaper-changer --change-now

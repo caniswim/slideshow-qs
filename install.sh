@@ -56,6 +56,11 @@ if ! python3 -c "import PIL" 2>/dev/null; then
     MISSING_DEPS="$MISSING_DEPS python-pillow"
 fi
 
+# Check numpy (optional, for better statistics)
+if ! python3 -c "import numpy" 2>/dev/null; then
+    echo -e "${YELLOW}Note: python-numpy not installed (optional for statistics)${NC}"
+fi
+
 if [ ! -z "$MISSING_DEPS" ]; then
     echo -e "${YELLOW}Missing dependencies:${MISSING_DEPS}${NC}"
     echo -e "${GREEN}Installing dependencies...${NC}"
@@ -74,6 +79,9 @@ sudo cp gallery_window.py "$INSTALL_DIR/"
 sudo cp gallery_window_modern.py "$INSTALL_DIR/"
 sudo cp wallpaper_manager.py "$INSTALL_DIR/"
 sudo cp config_manager.py "$INSTALL_DIR/"
+sudo cp wallpaper_metadata.py "$INSTALL_DIR/"
+sudo cp wallpaper_analyzer.py "$INSTALL_DIR/"
+sudo cp settings_dialog_modern.py "$INSTALL_DIR/"
 
 # Copy assets if they exist
 if [ -d "assets" ]; then

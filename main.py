@@ -17,7 +17,9 @@ from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QDialog,
     QVBoxLayout, QHBoxLayout, QLabel, QSpinBox,
     QPushButton, QFileDialog, QCheckBox, QDialogButtonBox,
-    QMessageBox, QComboBox, QGroupBox, QSlider
+    QMessageBox, QComboBox, QGroupBox, QSlider,
+    QTabWidget, QTimeEdit, QListWidget, QListWidgetItem, 
+    QGridLayout, QWidget
 )
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QIcon, QAction, QPixmap
@@ -25,8 +27,12 @@ from PyQt6.QtGui import QIcon, QAction, QPixmap
 from config_manager import ConfigManager
 from wallpaper_manager import WallpaperManager
 from gallery_window_modern import ModernGalleryWindow
+from settings_dialog_modern import ModernSettingsDialog
 
 
+# Legacy SettingsDialog - replaced by ModernSettingsDialog
+# Kept for reference but not used
+'''
 class SettingsDialog(QDialog):
     """Settings dialog for quick configuration"""
     
@@ -192,6 +198,7 @@ class SettingsDialog(QDialog):
             'avoid_recent_percentage': self.avoid_slider.value()
         })
         self.accept()
+'''
 
 
 class WallpaperChangerApp(QApplication):
@@ -419,7 +426,7 @@ class WallpaperChangerApp(QApplication):
     
     def show_settings(self):
         """Show settings dialog"""
-        dialog = SettingsDialog(self.config_manager)
+        dialog = ModernSettingsDialog(self.config_manager, self.wallpaper_manager)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             # Update wallpaper list if directory changed
             self.wallpaper_manager.refresh_wallpaper_list()

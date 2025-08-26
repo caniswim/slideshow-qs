@@ -1,0 +1,27 @@
+{
+  "dark": {
+    "enabled": true,
+    "time_ranges": [
+      {"start": "20:00", "end": "06:00"}
+    ]
+  },
+  "medium": {
+    "enabled": true,
+    "time_ranges": [
+      {"start": "06:00", "end": "09:00"},
+      {"start": "17:00", "end": "20:00"}
+    ]
+  },
+  "light": {
+    "enabled": true,
+    "time_ranges": [
+      {"start": "09:00", "end": "17:00"}
+    ]
+  },
+  "any": {
+    "enabled": true,
+    "time_ranges": [
+      {"start": "00:00", "end": "23:59"}
+    ]
+  }
+}

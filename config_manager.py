@@ -50,6 +50,12 @@ class ConfigManager:
             'sync_color_scheme': True,  # Enable Material Design color generation from wallpaper
             'random_mode': 'smart',  # 'pure' (pure random), 'smart' (avoid recent), 'sequential' (shuffle all)
             'avoid_recent_percentage': 25,  # Percentage of wallpapers to avoid repeating in smart mode
+            'time_based_enabled': False,  # Enable time-based wallpaper selection
+            'auto_analyze_wallpapers': True,  # Automatically analyze wallpapers on startup
+            'luminosity_thresholds': {  # Thresholds for luminosity classification
+                'dark': 0.18,   # Optimized for balanced distribution
+                'light': 0.36   # Optimized for balanced distribution
+            },
             'window_geometry': {
                 'x': 100,
                 'y': 100,
