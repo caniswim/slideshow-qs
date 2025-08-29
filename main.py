@@ -4,6 +4,7 @@ Main application with system tray for wallpaper changer
 """
 import sys
 import os
+import logging
 from pathlib import Path
 
 # Set environment variable to avoid conflicts
@@ -27,6 +28,7 @@ from PyQt6.QtGui import QIcon, QAction, QPixmap
 from config_manager import ConfigManager
 from wallpaper_manager import WallpaperManager
 from gallery_window_modern import ModernGalleryWindow
+from logging_config import setup_logging
 from settings_dialog_modern import ModernSettingsDialog
 
 
@@ -572,7 +574,7 @@ class WallpaperChangerApp(QApplication):
     
     def auto_change_wallpaper(self):
         """Automatically change wallpaper"""
-        wallpaper = self.wallpaper_manager.next_wallpaper()
+        wallpaper = self.wallpaper_manager.random_wallpaper()
         if wallpaper:
             self.show_notification(f"Wallpaper changed to: {wallpaper.name}")
             self.update_recent_menu_in_tray()
@@ -669,6 +671,17 @@ class WallpaperChangerApp(QApplication):
 def main():
     """Main entry point"""
     try:
+        # Setup logging
+        log_dir = Path.home() / '.config' / 'wallpaper-changer' / 'logs'
+        log_file = log_dir / 'wallpaper-changer.log'
+        setup_logging(
+            log_level=logging.INFO,
+            log_file=str(log_file)
+        )
+        
+        logger = logging.getLogger('Main')
+        logger.info("Starting Wallpaper Changer application")
+        
         # Enable high-DPI support before creating the app
         QApplication.setHighDpiScaleFactorRoundingPolicy(
             Qt.HighDpiScaleFactorRoundingPolicy.PassThrough

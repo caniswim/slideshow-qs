@@ -7,8 +7,9 @@ import os
 import random
 import subprocess
 import shutil
+import logging
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict
+from typing import List, Optional, Tuple, Dict, Any
 try:
     from PIL import Image
 except ImportError:
@@ -18,6 +19,14 @@ from config_manager import ConfigManager
 from wallpaper_metadata import WallpaperMetadata
 from wallpaper_analyzer import WallpaperAnalyzer
 from datetime import datetime
+from strategies import (
+    WallpaperSelectionStrategy,
+    SmartRandomStrategy,
+    PureRandomStrategy,
+    SequentialShuffleStrategy,
+    TimeBasedStrategy
+)
+from filters import FilterChain
 
 
 class WallpaperManager:
@@ -28,14 +37,21 @@ class WallpaperManager:
         self.current_index = -1
         self.image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
         
-        # Smart random tracking
-        self.unused_wallpapers = []  # Wallpapers not yet shown in current cycle
-        self.recent_wallpapers = []  # Recently shown wallpapers to avoid
-        self.session_history = []    # All wallpapers shown in this session
+        # Setup logging
+        self.logger = logging.getLogger(self.__class__.__name__)
         
         # Initialize metadata and analyzer
         self.metadata_manager = WallpaperMetadata(self.config.config_dir)
         self.analyzer = WallpaperAnalyzer(num_workers=4)
+        
+        # Initialize filter chain
+        self.filter_chain = FilterChain(self.config, self.metadata_manager)
+        self.filter_chain.build_default_chain()
+        
+        # Initialize strategies
+        self.strategies = self._initialize_strategies()
+        self.current_strategy: Optional[WallpaperSelectionStrategy] = None
+        self._update_strategy()
         
         # Quickshell config path
         config_home = os.environ.get('XDG_CONFIG_HOME', str(Path.home() / '.config'))
@@ -46,6 +62,42 @@ class WallpaperManager:
         
         # Load initial wallpaper list
         self.refresh_wallpaper_list()
+    
+    def _initialize_strategies(self) -> Dict[str, WallpaperSelectionStrategy]:
+        """Initialize all available strategies"""
+        strategies = {
+            'smart': SmartRandomStrategy({
+                'avoid_recent_percentage': self.config.get('avoid_recent_percentage', 25)
+            }),
+            'pure': PureRandomStrategy(),
+            'sequential': SequentialShuffleStrategy()
+        }
+        
+        # Time-based strategy wraps the appropriate inner strategy
+        for mode in ['smart', 'pure', 'sequential']:
+            strategies[f'time_{mode}'] = TimeBasedStrategy({
+                'metadata_manager': self.metadata_manager,
+                'inner_strategy': strategies[mode]
+            })
+        
+        return strategies
+    
+    def _update_strategy(self):
+        """Update the current strategy based on configuration"""
+        mode = self.config.get('random_mode', 'smart')
+        time_based = self.config.get('time_based_enabled', False)
+        
+        if time_based:
+            strategy_key = f'time_{mode}'
+        else:
+            strategy_key = mode
+        
+        if strategy_key in self.strategies:
+            self.current_strategy = self.strategies[strategy_key]
+            self.logger.info(f"Using strategy: {strategy_key}")
+        else:
+            self.current_strategy = self.strategies['smart']
+            self.logger.warning(f"Unknown strategy {strategy_key}, using smart")
     
     def refresh_wallpaper_list(self) -> List[Path]:
         """Refresh the list of available wallpapers"""
@@ -58,18 +110,13 @@ class WallpaperManager:
         wallpapers = []
         for file in directory.iterdir():
             if file.is_file() and file.suffix.lower() in self.image_extensions:
-                if not self.config.is_file_excluded(str(file)):
-                    wallpapers.append(file)
+                wallpapers.append(file)
         
-        # Sort by name or shuffle if enabled
-        if self.config.get('shuffle', True):
-            random.shuffle(wallpapers)
-        else:
-            wallpapers.sort(key=lambda x: x.name.lower())
+        # Sort by name
+        wallpapers.sort(key=lambda x: x.name.lower())
         
         self.wallpaper_list = wallpapers
-        # Reset unused wallpapers list for smart random
-        self.unused_wallpapers = wallpapers.copy()
+        self.logger.info(f"Refreshed wallpaper list: {len(wallpapers)} wallpapers found")
         return wallpapers
     
     def get_wallpaper_list(self) -> List[Path]:
@@ -165,7 +212,7 @@ class WallpaperManager:
             print(f"Error changing wallpaper: {e}")
             return False
     
-    def next_wallpaper(self) -> Optional[Path]:
+    def next_wallpaper(self, respect_filters: bool = True) -> Optional[Path]:
         """Set next wallpaper in the list"""
         if not self.wallpaper_list:
             self.refresh_wallpaper_list()
@@ -173,14 +220,36 @@ class WallpaperManager:
         if not self.wallpaper_list:
             return None
         
-        self.current_index = (self.current_index + 1) % len(self.wallpaper_list)
-        wallpaper = self.wallpaper_list[self.current_index]
+        if respect_filters:
+            # Apply filters and get next from filtered list
+            context = self._get_filter_context()
+            filtered = self.filter_chain.apply(self.wallpaper_list, context)
+            
+            if not filtered:
+                self.logger.warning("No wallpapers after filtering, using unfiltered list")
+                filtered = self.wallpaper_list
+            
+            # Find current wallpaper in filtered list
+            current = self.get_current_wallpaper()
+            if current in filtered:
+                current_idx = filtered.index(current)
+                next_idx = (current_idx + 1) % len(filtered)
+                wallpaper = filtered[next_idx]
+            else:
+                # Current not in filtered, pick first from filtered
+                wallpaper = filtered[0] if filtered else None
+        else:
+            # Simple next without filters
+            self.current_index = (self.current_index + 1) % len(self.wallpaper_list)
+            wallpaper = self.wallpaper_list[self.current_index]
         
-        if self.set_wallpaper(wallpaper):
+        if wallpaper and self.set_wallpaper(wallpaper):
+            if self.current_strategy:
+                self.current_strategy.update_tracking(wallpaper)
             return wallpaper
         return None
     
-    def previous_wallpaper(self) -> Optional[Path]:
+    def previous_wallpaper(self, respect_filters: bool = True) -> Optional[Path]:
         """Set previous wallpaper in the list"""
         if not self.wallpaper_list:
             self.refresh_wallpaper_list()
@@ -188,148 +257,86 @@ class WallpaperManager:
         if not self.wallpaper_list:
             return None
         
-        self.current_index = (self.current_index - 1) % len(self.wallpaper_list)
-        wallpaper = self.wallpaper_list[self.current_index]
+        if respect_filters:
+            # Apply filters and get previous from filtered list
+            context = self._get_filter_context()
+            filtered = self.filter_chain.apply(self.wallpaper_list, context)
+            
+            if not filtered:
+                self.logger.warning("No wallpapers after filtering, using unfiltered list")
+                filtered = self.wallpaper_list
+            
+            # Find current wallpaper in filtered list
+            current = self.get_current_wallpaper()
+            if current in filtered:
+                current_idx = filtered.index(current)
+                prev_idx = (current_idx - 1) % len(filtered)
+                wallpaper = filtered[prev_idx]
+            else:
+                # Current not in filtered, pick last from filtered
+                wallpaper = filtered[-1] if filtered else None
+        else:
+            # Simple previous without filters
+            self.current_index = (self.current_index - 1) % len(self.wallpaper_list)
+            wallpaper = self.wallpaper_list[self.current_index]
         
-        if self.set_wallpaper(wallpaper):
+        if wallpaper and self.set_wallpaper(wallpaper):
+            if self.current_strategy:
+                self.current_strategy.update_tracking(wallpaper)
             return wallpaper
         return None
     
-    def _update_wallpaper_tracking(self, wallpaper: Path):
-        """Update tracking lists when a wallpaper is shown"""
-        # Add to session history
-        if wallpaper not in self.session_history:
-            self.session_history.append(wallpaper)
+    def _get_filter_context(self) -> Dict[str, Any]:
+        """Get context for filter chain"""
+        context = {
+            'time_based_enabled': self.config.get('time_based_enabled', False),
+            'current_time': datetime.now().time(),
+            'current_wallpaper': self.get_current_wallpaper(),
+            'luminosity_filter': None,  # Can be set for specific filtering
+            'filter_recent': False,  # Will be set based on mode
+            'recent_wallpapers': []
+        }
         
-        # Remove from unused list
-        if wallpaper in self.unused_wallpapers:
-            self.unused_wallpapers.remove(wallpaper)
+        # Add recent wallpapers if using smart mode
+        mode = self.config.get('random_mode', 'smart')
+        if mode == 'smart' and self.current_strategy:
+            if hasattr(self.current_strategy, 'recent_wallpapers'):
+                context['filter_recent'] = True
+                context['recent_wallpapers'] = self.current_strategy.recent_wallpapers
         
-        # Update recent wallpapers list
-        avoid_percentage = self.config.get('avoid_recent_percentage', 25)
-        max_recent = max(1, len(self.wallpaper_list) * avoid_percentage // 100)
-        
-        if wallpaper in self.recent_wallpapers:
-            self.recent_wallpapers.remove(wallpaper)
-        self.recent_wallpapers.append(wallpaper)
-        
-        # Keep recent list within size limit
-        if len(self.recent_wallpapers) > max_recent:
-            self.recent_wallpapers.pop(0)
-    
-    def get_smart_random_wallpaper(self) -> Optional[Path]:
-        """Get a smart random wallpaper that avoids recent ones"""
-        if not self.wallpaper_list:
-            self.refresh_wallpaper_list()
-        
-        if not self.wallpaper_list:
-            return None
-        
-        # If all wallpapers have been shown, reset the unused list
-        if not self.unused_wallpapers:
-            self.unused_wallpapers = self.wallpaper_list.copy()
-            # Remove current wallpaper from unused
-            current = self.get_current_wallpaper()
-            if current and current in self.unused_wallpapers:
-                self.unused_wallpapers.remove(current)
-        
-        # Filter out recent wallpapers from unused list
-        available = [w for w in self.unused_wallpapers if w not in self.recent_wallpapers]
-        
-        # If no wallpapers available after filtering, use unused list
-        if not available:
-            available = self.unused_wallpapers
-        
-        # If still no wallpapers, use full list minus current
-        if not available:
-            current = self.get_current_wallpaper()
-            available = [w for w in self.wallpaper_list if w != current]
-        
-        # If only current wallpaper exists, return None
-        if not available:
-            return None
-        
-        return random.choice(available)
-    
-    def get_sequential_shuffle_wallpaper(self) -> Optional[Path]:
-        """Get next wallpaper in shuffled sequence, reshuffling when cycle completes"""
-        if not self.wallpaper_list:
-            self.refresh_wallpaper_list()
-        
-        if not self.wallpaper_list:
-            return None
-        
-        # If all wallpapers have been shown, reshuffle
-        if not self.unused_wallpapers:
-            self.unused_wallpapers = self.wallpaper_list.copy()
-            random.shuffle(self.unused_wallpapers)
-            # Remove current wallpaper from beginning if it's there
-            current = self.get_current_wallpaper()
-            if current and self.unused_wallpapers and self.unused_wallpapers[0] == current:
-                self.unused_wallpapers.append(self.unused_wallpapers.pop(0))
-        
-        # Get the next wallpaper from the shuffled list
-        if self.unused_wallpapers:
-            return self.unused_wallpapers[0]
-        
-        return None
-    
-    def get_time_based_wallpaper(self) -> Optional[Path]:
-        """Get a wallpaper suitable for current time of day"""
-        current_time = datetime.now().time()
-        
-        # Get wallpapers suitable for current time
-        suitable_paths = self.metadata_manager.get_wallpapers_for_current_time(current_time)
-        
-        if not suitable_paths:
-            # Fallback to any wallpaper if no time-based selection available
-            return self.get_smart_random_wallpaper()
-        
-        # Filter to only existing wallpapers in our list
-        available = []
-        for wallpaper in self.wallpaper_list:
-            if str(wallpaper) in suitable_paths:
-                # Also check if not in recent
-                if wallpaper not in self.recent_wallpapers:
-                    available.append(wallpaper)
-        
-        # If all suitable wallpapers are recent, use all suitable
-        if not available:
-            available = [w for w in self.wallpaper_list if str(w) in suitable_paths]
-        
-        if available:
-            return random.choice(available)
-        
-        return None
+        return context
     
     def random_wallpaper(self) -> Optional[Path]:
         """Set a random wallpaper based on configured mode"""
-        mode = self.config.get('random_mode', 'smart')
-        time_based = self.config.get('time_based_enabled', False)
+        if not self.wallpaper_list:
+            self.refresh_wallpaper_list()
         
-        # If time-based selection is enabled, use that
-        if time_based:
-            wallpaper = self.get_time_based_wallpaper()
-        elif mode == 'pure':
-            # Pure random - original behavior
-            if not self.wallpaper_list:
-                self.refresh_wallpaper_list()
-            
-            if not self.wallpaper_list:
-                return None
-            
-            wallpaper = random.choice(self.wallpaper_list)
+        if not self.wallpaper_list:
+            return None
         
-        elif mode == 'sequential':
-            # Sequential shuffle - go through all before repeating
-            wallpaper = self.get_sequential_shuffle_wallpaper()
+        # Update strategy based on current config
+        self._update_strategy()
         
-        else:  # smart mode (default)
-            # Smart random - avoid recent wallpapers
-            wallpaper = self.get_smart_random_wallpaper()
+        # Get filter context
+        context = self._get_filter_context()
+        
+        # Apply filters
+        filtered = self.filter_chain.apply(self.wallpaper_list, context)
+        
+        if not filtered:
+            self.logger.warning("No wallpapers after filtering, using unfiltered list")
+            filtered = self.wallpaper_list
+        
+        # Use strategy to select wallpaper
+        if self.current_strategy:
+            wallpaper = self.current_strategy.select(filtered, context)
+        else:
+            # Fallback to random if no strategy
+            wallpaper = random.choice(filtered) if filtered else None
         
         if wallpaper and self.set_wallpaper(wallpaper):
-            self._update_wallpaper_tracking(wallpaper)
+            if self.current_strategy:
+                self.current_strategy.update_tracking(wallpaper)
             return wallpaper
         return None
     
@@ -463,20 +470,26 @@ class WallpaperManager:
     
     def get_session_stats(self) -> dict:
         """Get statistics about current session"""
-        return {
+        stats = {
             'total_wallpapers': len(self.wallpaper_list),
-            'unused_wallpapers': len(self.unused_wallpapers),
-            'session_shown': len(self.session_history),
-            'recent_avoided': len(self.recent_wallpapers),
             'random_mode': self.config.get('random_mode', 'smart'),
+            'time_based_enabled': self.config.get('time_based_enabled', False),
             'avoid_percentage': self.config.get('avoid_recent_percentage', 25)
         }
+        
+        # Add strategy-specific stats
+        if self.current_strategy:
+            stats.update(self.current_strategy.get_stats())
+        
+        return stats
     
     def reset_session_tracking(self):
         """Reset session tracking for a fresh start"""
-        self.unused_wallpapers = self.wallpaper_list.copy()
-        self.recent_wallpapers = []
-        self.session_history = []
+        # Reset all strategies
+        for strategy in self.strategies.values():
+            strategy.reset()
+        
+        self.logger.info("Session tracking reset")
     
     def analyze_wallpapers(self, progress_callback=None) -> Dict:
         """Analyze all wallpapers in the directory"""

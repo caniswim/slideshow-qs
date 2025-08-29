@@ -4,7 +4,7 @@ Metadata manager for wallpaper classification and time-based selection
 """
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, time
 import threading
 
@@ -29,6 +29,11 @@ class WallpaperMetadata:
         
         # Thread lock for concurrent access
         self.lock = threading.Lock()
+        
+        # Cache for time-based filtering
+        self._cache = {}
+        self._cache_timestamp = None
+        self._cache_ttl = 60  # Cache TTL in seconds
     
     def get_default_time_schedules(self) -> Dict:
         """Get default time schedules for each luminosity category"""
@@ -50,12 +55,6 @@ class WallpaperMetadata:
                 'enabled': True,
                 'time_ranges': [
                     {'start': '09:00', 'end': '17:00'},  # Day
-                ]
-            },
-            'any': {
-                'enabled': True,
-                'time_ranges': [
-                    {'start': '00:00', 'end': '23:59'},  # All day
                 ]
             }
         }
@@ -190,21 +189,58 @@ class WallpaperMetadata:
                     active.append(classification)
                     break
         
-        return active if active else ['any']
+        # Return empty list if no classifications are active
+        # This means no time-based filtering should be applied
+        return active
+    
+    def _invalidate_cache(self):
+        """Invalidate the cache"""
+        self._cache = {}
+        self._cache_timestamp = None
+    
+    def _is_cache_valid(self) -> bool:
+        """Check if cache is still valid"""
+        if not self._cache_timestamp:
+            return False
+        
+        elapsed = (datetime.now() - self._cache_timestamp).total_seconds()
+        return elapsed < self._cache_ttl
     
     def get_wallpapers_for_current_time(self, current_time: time = None) -> List[str]:
-        """Get wallpapers suitable for the current time"""
+        """Get wallpapers suitable for the current time with caching"""
+        if current_time is None:
+            current_time = datetime.now().time()
+        
+        # Check cache
+        cache_key = f"{current_time.hour}:{current_time.minute // 15}"  # 15-minute granularity
+        
+        if self._is_cache_valid() and cache_key in self._cache:
+            return self._cache[cache_key]
+        
         active_classifications = self.get_active_classifications(current_time)
         
-        suitable = []
-        for path, data in self.metadata.items():
-            classification = data.get('classification', 'medium')
+        # If no classifications are active, return all wallpapers (no time filtering)
+        if not active_classifications:
+            result = list(self.metadata.keys())
+        else:
+            # Filter wallpapers by active classifications
+            suitable = []
+            for path, data in self.metadata.items():
+                classification = data.get('classification', 'medium')
+                
+                # Check if wallpaper's classification matches active ones
+                if classification in active_classifications:
+                    suitable.append(path)
             
-            # Check if wallpaper's classification matches active ones
-            if classification in active_classifications or 'any' in active_classifications:
-                suitable.append(path)
+            result = suitable
         
-        return suitable
+        # Update cache
+        if not self._is_cache_valid():
+            self._cache = {}
+            self._cache_timestamp = datetime.now()
+        
+        self._cache[cache_key] = result
+        return result
     
     def get_wallpapers_by_classification(self, classification: str) -> List[str]:
         """Get all wallpapers with a specific classification"""
@@ -273,6 +309,51 @@ class WallpaperMetadata:
             return False
         
         return False
+    
+    def validate_schedules(self) -> Dict[str, Any]:
+        """Validate time schedules for gaps and overlaps"""
+        issues = {
+            'gaps': [],
+            'overlaps': [],
+            'coverage': True
+        }
+        
+        # Collect all time points
+        time_points = []
+        for classification, schedule in self.time_schedules.items():
+            if not schedule.get('enabled', True):
+                continue
+            
+            for time_range in schedule.get('time_ranges', []):
+                start = self.parse_time(time_range['start'])
+                end = self.parse_time(time_range['end'])
+                time_points.append((start, end, classification))
+        
+        # Check for complete coverage of 24 hours
+        minutes_covered = set()
+        for start, end, classification in time_points:
+            start_minutes = start.hour * 60 + start.minute
+            end_minutes = end.hour * 60 + end.minute
+            
+            if start <= end:
+                # Normal range
+                for minute in range(start_minutes, end_minutes + 1):
+                    minutes_covered.add(minute % (24 * 60))
+            else:
+                # Range spans midnight
+                for minute in range(start_minutes, 24 * 60):
+                    minutes_covered.add(minute)
+                for minute in range(0, end_minutes + 1):
+                    minutes_covered.add(minute)
+        
+        # Check if all minutes are covered
+        total_minutes = 24 * 60
+        if len(minutes_covered) < total_minutes:
+            issues['coverage'] = False
+            missing_minutes = total_minutes - len(minutes_covered)
+            issues['gaps'].append(f"Missing {missing_minutes} minutes of coverage")
+        
+        return issues
     
     def export_schedules_config(self) -> str:
         """Export time schedules as formatted string for display"""
